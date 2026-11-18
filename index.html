@@ -93,7 +93,6 @@
 </head>
 <body>
 
-  <!-- Bouton mis à jour -->
   <button id="openModalBtn" class="btn">
     <span>📥</span> Importer des voeux (format .csv uniquement)
   </button>
@@ -234,7 +233,7 @@
     const lines = text.split(/\r\n|\n/).filter(l => l.trim() !== "");
     if (lines.length === 0) return [];
 
-    const firstLine = lines[0];
+    const firstLine = lines[0].replace(/^\ufeff/, '');
     const semiCount = (firstLine.match(/;/g) || []).length;
     const commaCount = (firstLine.match(/,/g) || []).length;
     const delimiter = semiCount > commaCount ? ';' : ',';
@@ -263,7 +262,7 @@
       return result;
     }
 
-    const headers = parseLine(lines[0]).map(h => h.replace(/^"|"$/g, '').trim());
+    const headers = parseLine(firstLine).map(h => h.replace(/^"|"$/g, '').trim());
     const rows = [];
 
     for (let i = 1; i < lines.length; i++) {
@@ -304,20 +303,24 @@
       .toLowerCase();
   }
 
-  function matchEcole(rawVal) {
-    const cleanInput = normalizeStr(rawVal);
-    if (!cleanInput) return null;
-    for (const ecole of VALID_ECOLES) {
-      if (normalizeStr(ecole) === cleanInput) return ecole;
-    }
+  // Reconnaissance automatique du cycle uniquement
+  function matchCycle(rawVal) {
+    const clean = String(rawVal || "").trim().toUpperCase();
+    if (VALID_CYCLES.includes(clean)) return clean;
+    if (clean.includes("EE")) return "EE";
+    if (clean.includes("EM")) return "EM";
     return null;
   }
 
-  function matchCycle(rawVal) {
-    const clean = String(rawVal || "").trim().toUpperCase();
-    return VALID_CYCLES.includes(clean) ? clean : null;
+  // Vérification exacte / tolérante pour l'école (doit correspondre à la liste, sinon erreur)
+  function matchEcoleExact(rawVal) {
+    const val = String(rawVal || "").trim();
+    // Recherche correspondance exacte sensible ou insensible à la casse
+    const found = VALID_ECOLES.find(e => e.toLowerCase() === val.toLowerCase());
+    return found || null;
   }
 
+  // Analyse des niveaux multiples
   function parseNiveaux(rawVal) {
     const str = String(rawVal || "").trim().toUpperCase();
     if (!str) return { valid: false, values: [] };
@@ -341,12 +344,18 @@
       const cleanRecord = {};
       const errors = {};
 
+      const getVal = (key) => {
+        if (row[key] !== undefined) return row[key];
+        const foundKey = Object.keys(row).find(k => k.trim().toLowerCase() === key.trim().toLowerCase());
+        return foundKey ? row[foundKey] : "";
+      };
+
       TEXT_COLS.forEach(col => {
-        cleanRecord[col] = row[col] !== undefined && row[col] !== null ? String(row[col]).trim() : "";
+        cleanRecord[col] = String(getVal(col)).trim();
       });
 
       NUMERIC_COLS.forEach(col => {
-        const raw = row[col];
+        const raw = getVal(col);
         if (raw === "" || raw === null || raw === undefined) {
           cleanRecord[col] = null;
         } else {
@@ -360,27 +369,33 @@
         }
       });
 
-      const matchedCycle = matchCycle(row["Cycle"]);
+      // 1. CYCLE : Reconnaissance automatique
+      const rawCycle = getVal("Cycle");
+      const matchedCycle = matchCycle(rawCycle);
       if (matchedCycle) {
         cleanRecord["Cycle"] = matchedCycle;
       } else {
-        errors["Cycle"] = { rawValue: row["Cycle"] || "(vide)", reason: "Cycle invalide (EE ou EM attendu)" };
+        errors["Cycle"] = { rawValue: rawCycle || "(vide)", reason: "Cycle invalide (EE ou EM attendu)" };
         cleanRecord["Cycle"] = "";
       }
 
-      const matchedEcole = matchEcole(row["Ecole"]);
+      // 2. ECOLE : Validation stricte (remonte en anomalie si non conforme/inconnue)
+      const rawEcole = getVal("Ecole");
+      const matchedEcole = matchEcoleExact(rawEcole);
       if (matchedEcole) {
         cleanRecord["Ecole"] = matchedEcole;
       } else {
-        errors["Ecole"] = { rawValue: row["Ecole"] || "(vide)", reason: "École non reconnue dans la liste Grist" };
+        errors["Ecole"] = { rawValue: rawEcole || "(vide)", reason: "École non reconnue dans la liste Grist" };
         cleanRecord["Ecole"] = "";
       }
 
-      const parsedNiv = parseNiveaux(row["Niveau"]);
+      // 3. NIVEAU : Validation des choix multiples (remonte en anomalie si format invalide)
+      const rawNiveau = getVal("Niveau");
+      const parsedNiv = parseNiveaux(rawNiveau);
       if (parsedNiv.valid) {
         cleanRecord["Niveau"] = ['L', ...parsedNiv.values];
       } else {
-        errors["Niveau"] = { rawValue: row["Niveau"] || "(vide)", reason: "Un ou plusieurs niveaux non reconnus" };
+        errors["Niveau"] = { rawValue: rawNiveau || "(vide)", reason: "Un ou plusieurs niveaux non reconnus" };
         cleanRecord["Niveau"] = ['L'];
       }
 
