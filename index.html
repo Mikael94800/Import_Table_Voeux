@@ -3,11 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Import Excel - Table_voeux (Grist)</title>
-  <!-- API Grist -->
+  <title>Import CSV - Table_voeux (Grist)</title>
+  <!-- API Grist (seule dépendance externe officielle) -->
   <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
-  <!-- Bibliothèque SheetJS pour lire les fichiers Excel -->
-  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
   <style>
     :root {
       --primary: #16b378; /* Vert Grist */
@@ -23,7 +21,6 @@
     * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
     body { margin: 0; padding: 20px; background: transparent; color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; }
 
-    /* Bouton déclencheur principal */
     .btn {
       background: var(--primary); color: white; border: none; padding: 12px 20px;
       border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
@@ -37,7 +34,6 @@
     .btn-danger { background: #fed7d7; color: #c53030; }
     .btn-danger:hover { background: #feb2b2; }
 
-    /* Modale */
     .modal-overlay {
       display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
       justify-content: center; align-items: center; z-index: 1000; padding: 16px;
@@ -58,7 +54,6 @@
       display: flex; justify-content: space-between; align-items: center; gap: 10px;
     }
 
-    /* Zone Drag & Drop */
     .drop-zone {
       border: 2px dashed #cbd5e0; border-radius: 8px; padding: 40px 20px; text-align: center;
       cursor: pointer; transition: all 0.2s; background: var(--bg);
@@ -70,7 +65,6 @@
       border-radius: 6px; color: #234e52; font-weight: 600; display: none;
     }
 
-    /* Résumé et Anomalies */
     .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
     .stat-card { padding: 15px; border-radius: 8px; border: 1px solid var(--border); text-align: center; }
     .stat-card.valid { background: #f0fff4; border-color: #9ae6b4; color: #22543d; }
@@ -99,26 +93,25 @@
 </head>
 <body>
 
-  <!-- Bouton visible dans le widget Grist -->
+  <!-- Bouton mis à jour -->
   <button id="openModalBtn" class="btn">
-    <span>📥</span> Importer des vœux (Excel)
+    <span>📥</span> Importer des voeux (format .csv uniquement)
   </button>
 
-  <!-- Modale principale -->
   <div id="importModal" class="modal-overlay">
     <div class="modal">
       <div class="modal-header">
-        <span id="modalTitle">Importer un fichier Excel dans Table_voeux</span>
+        <span id="modalTitle">Importer un fichier CSV dans Table_voeux</span>
         <button class="close-btn" id="closeModalBtn">&times;</button>
       </div>
 
-      <!-- ÉTAPE 1 : Sélection du fichier -->
+      <!-- ÉTAPE 1 : Sélection du fichier CSV -->
       <div id="stepUpload" class="modal-body">
         <div id="dropZone" class="drop-zone">
           <div style="font-size: 32px;">📄</div>
           <strong>Glisser le fichier à importer ici</strong>
-          <p>ou cliquez pour parcourir vos fichiers (.xlsx, .xls, .csv)</p>
-          <input type="file" id="fileInput" accept=".xlsx, .xls, .csv" class="hidden">
+          <p>ou cliquez pour parcourir vos fichiers (.csv)</p>
+          <input type="file" id="fileInput" accept=".csv, text/csv" class="hidden">
         </div>
         <div id="fileInfo" class="file-badge"></div>
       </div>
@@ -136,10 +129,9 @@
           </div>
         </div>
 
-        <!-- Interface de résolution pas-à-pas -->
         <div id="anomalyContainer" class="anomaly-box hidden">
           <div class="anomaly-header">
-            <span id="anomalyProgress">Anomalie 1 sur X (Ligne Excel #Y)</span>
+            <span id="anomalyProgress">Anomalie 1 sur X (Ligne CSV #Y)</span>
             <button type="button" id="ignoreRowBtn" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Ignorer cette ligne</button>
           </div>
           <div id="anomalyContext" style="font-size: 12px; color: #4a5568; margin-bottom: 12px;"></div>
@@ -155,7 +147,6 @@
         </div>
       </div>
 
-      <!-- Pied de modale -->
       <div class="modal-footer">
         <button type="button" id="resetBtn" class="btn btn-secondary hidden">Changer de fichier</button>
         <div style="margin-left: auto; display: flex; gap: 10px;">
@@ -168,9 +159,6 @@
   </div>
 
 <script>
-  // =========================================================================
-  // 1. CONFIGURATION DE LA TABLE GRIST "Table_voeux"
-  // =========================================================================
   const TABLE_NAME = "Table_voeux";
 
   const VALID_CYCLES = ["EE", "EM"];
@@ -190,17 +178,12 @@
     "RangParcours", "VoeuxExprimes", "Mail", "Telephone"
   ];
 
-  // Initialisation de l'API Grist avec accès complet au document
   grist.ready({ requiredAccess: 'full' });
 
-  // =========================================================================
-  // 2. ÉTAT DE L'APPLICATION
-  // =========================================================================
   let selectedFile = null;
-  let parsedRows = []; // Contient { rowIndex, data, errors, ignored, resolved }
+  let parsedRows = [];
   let currentAnomalyIdx = 0;
 
-  // Éléments DOM
   const modal = document.getElementById('importModal');
   const dropZone = document.getElementById('dropZone');
   const fileInput = document.getElementById('fileInput');
@@ -209,13 +192,7 @@
   const finalImportBtn = document.getElementById('finalImportBtn');
   const resetBtn = document.getElementById('resetBtn');
 
-  // =========================================================================
-  // 3. GESTION DE LA MODALE ET DU DRAG & DROP
-  // =========================================================================
-  document.getElementById('openModalBtn').onclick = () => {
-    resetState();
-    modal.classList.add('active');
-  };
+  document.getElementById('openModalBtn').onclick = () => { resetState(); modal.classList.add('active'); };
   document.getElementById('closeModalBtn').onclick = () => modal.classList.remove('active');
   document.getElementById('cancelBtn').onclick = () => modal.classList.remove('active');
   resetBtn.onclick = resetState;
@@ -253,29 +230,70 @@
     document.getElementById('stepReview').classList.add('hidden');
   }
 
-  // =========================================================================
-  // 4. PARSING EXCEL & NORMALISATION DES DONNÉES
-  // =========================================================================
+  function parseCSV(text) {
+    const lines = text.split(/\r\n|\n/).filter(l => l.trim() !== "");
+    if (lines.length === 0) return [];
+
+    const firstLine = lines[0];
+    const semiCount = (firstLine.match(/;/g) || []).length;
+    const commaCount = (firstLine.match(/,/g) || []).length;
+    const delimiter = semiCount > commaCount ? ';' : ',';
+
+    function parseLine(line) {
+      const result = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          if (inQuotes && line[i+1] === '"') {
+            current += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === delimiter && !inQuotes) {
+          result.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    }
+
+    const headers = parseLine(lines[0]).map(h => h.replace(/^"|"$/g, '').trim());
+    const rows = [];
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = parseLine(lines[i]).map(v => v.replace(/^"|"$/g, '').trim());
+      const rowObj = {};
+      headers.forEach((h, index) => {
+        rowObj[h] = values[index] !== undefined ? values[index] : '';
+      });
+      rows.push(rowObj);
+    }
+    return rows;
+  }
+
   validateFileBtn.onclick = () => {
     if (!selectedFile) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-      const data = new Uint8Array(e.target.result);
-      const workbook = XLSX.read(data, { type: 'array' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const rawJson = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+      const text = e.target.result;
+      const rawJson = parseCSV(text);
 
       if (rawJson.length === 0) {
-        alert("Le fichier Excel semble vide.");
+        alert("Le fichier CSV semble vide ou mal formaté.");
         return;
       }
 
-      processExcelData(rawJson);
+      processCSVData(rawJson);
     };
-    reader.readAsArrayBuffer(selectedFile);
+    reader.readAsText(selectedFile, 'UTF-8');
   };
 
-  // Fonction utilitaire pour supprimer accents, tirets et espaces superflus
   function normalizeStr(str) {
     return String(str || "")
       .normalize("NFD")
@@ -286,7 +304,6 @@
       .toLowerCase();
   }
 
-  // Recherche tolérante pour l'école
   function matchEcole(rawVal) {
     const cleanInput = normalizeStr(rawVal);
     if (!cleanInput) return null;
@@ -296,18 +313,15 @@
     return null;
   }
 
-  // Recherche tolérante pour le Cycle
   function matchCycle(rawVal) {
     const clean = String(rawVal || "").trim().toUpperCase();
     return VALID_CYCLES.includes(clean) ? clean : null;
   }
 
-  // Découpage intelligent des niveaux multiples ("CP / CE1", "CP,CE1", "CP + CE1", etc.)
   function parseNiveaux(rawVal) {
     const str = String(rawVal || "").trim().toUpperCase();
     if (!str) return { valid: false, values: [] };
 
-    // Sépare sur espace, virgule, point-virgule, slash, plus, tiret
     const tokens = str.split(/[\s,;\/+\-]+/).filter(t => t.length > 0);
     if (tokens.length === 0) return { valid: false, values: [] };
 
@@ -316,29 +330,26 @@
       if (VALID_NIVEAUX.includes(token)) {
         if (!matched.includes(token)) matched.push(token);
       } else {
-        return { valid: false, values: [] }; // Un des niveaux n'est pas reconnu
+        return { valid: false, values: [] };
       }
     }
     return { valid: true, values: matched };
   }
 
-  function processExcelData(rows) {
+  function processCSVData(rows) {
     parsedRows = rows.map((row, index) => {
       const cleanRecord = {};
-      const errors = {}; // { colName: { rawValue, reason } }
+      const errors = {};
 
-      // 1. Colonnes Texte
       TEXT_COLS.forEach(col => {
         cleanRecord[col] = row[col] !== undefined && row[col] !== null ? String(row[col]).trim() : "";
       });
 
-      // 2. Colonnes Numériques
       NUMERIC_COLS.forEach(col => {
         const raw = row[col];
         if (raw === "" || raw === null || raw === undefined) {
           cleanRecord[col] = null;
         } else {
-          // Nettoie espaces et symboles (€)
           const num = Number(String(raw).replace(/\s/g, '').replace('€', '').replace(',', '.'));
           if (isNaN(num)) {
             errors[col] = { rawValue: raw, reason: "Valeur numérique attendue" };
@@ -349,7 +360,6 @@
         }
       });
 
-      // 3. Cycle (Choix unique)
       const matchedCycle = matchCycle(row["Cycle"]);
       if (matchedCycle) {
         cleanRecord["Cycle"] = matchedCycle;
@@ -358,7 +368,6 @@
         cleanRecord["Cycle"] = "";
       }
 
-      // 4. Ecole (Choix unique tolérant aux accents)
       const matchedEcole = matchEcole(row["Ecole"]);
       if (matchedEcole) {
         cleanRecord["Ecole"] = matchedEcole;
@@ -367,10 +376,8 @@
         cleanRecord["Ecole"] = "";
       }
 
-      // 5. Niveau (Choix multiple)
       const parsedNiv = parseNiveaux(row["Niveau"]);
       if (parsedNiv.valid) {
-        // Format attendu par Grist pour les colonnes ChoiceList : ['L', 'CP', 'CE1']
         cleanRecord["Niveau"] = ['L', ...parsedNiv.values];
       } else {
         errors["Niveau"] = { rawValue: row["Niveau"] || "(vide)", reason: "Un ou plusieurs niveaux non reconnus" };
@@ -378,7 +385,7 @@
       }
 
       return {
-        excelLine: index + 2, // +2 car ligne 1 = en-têtes Excel
+        excelLine: index + 2,
         data: cleanRecord,
         errors: errors,
         ignored: false,
@@ -386,7 +393,6 @@
       };
     });
 
-    // Basculer vers l'écran d'analyse
     document.getElementById('stepUpload').classList.add('hidden');
     document.getElementById('stepReview').classList.remove('hidden');
     validateFileBtn.classList.add('hidden');
@@ -397,11 +403,7 @@
     updateReviewUI();
   }
 
-  // =========================================================================
-  // 5. INTERFACE DE RÉSOLUTION DES ANOMALIES
-  // =========================================================================
   function getAnomalyRows() {
-    // Retourne toutes les lignes qui avaient initialement une erreur et qui ne sont pas ignorées
     return parsedRows.filter(r => Object.keys(r.errors).length > 0 && !r.ignored);
   }
 
@@ -428,9 +430,8 @@
     errorCard.classList.remove('zero');
     allClearMsg.classList.add('hidden');
     anomalyContainer.classList.remove('hidden');
-    finalImportBtn.disabled = true; // Verrouillé tant qu'il reste une anomalie
+    finalImportBtn.disabled = true;
 
-    // S'assurer que l'index reste dans les bornes
     if (currentAnomalyIdx >= anomalies.length) currentAnomalyIdx = anomalies.length - 1;
     if (currentAnomalyIdx < 0) currentAnomalyIdx = 0;
 
@@ -440,7 +441,7 @@
   function renderAnomalyEditor(anomalies, idx) {
     const rowObj = anomalies[idx];
     document.getElementById('anomalyProgress').textContent =
-      `Anomalie ${idx + 1} sur ${anomalies.length} (Ligne Excel n°${rowObj.excelLine}) ${rowObj.resolved ? '✅ Corrigée' : '⚠️ À corriger'}`;
+      `Anomalie ${idx + 1} sur ${anomalies.length} (Ligne CSV n°${rowObj.excelLine}) ${rowObj.resolved ? '✅ Corrigée' : '⚠️ À corriger'}`;
 
     document.getElementById('anomalyContext').innerHTML =
       `<strong>Contexte :</strong> Enseignant : <em>${rowObj.data.Enseignant || 'Non renseigné'}</em> | Parcours : <em>${rowObj.data.NomParcours || 'Non renseigné'}</em>`;
@@ -448,7 +449,6 @@
     const fieldsContainer = document.getElementById('anomalyFields');
     fieldsContainer.innerHTML = '';
 
-    // Génère uniquement les champs en erreur pour cette ligne
     for (const [col, errInfo] of Object.entries(rowObj.errors)) {
       const group = document.createElement('div');
       group.className = 'field-group';
@@ -459,7 +459,7 @@
 
       const rawSpan = document.createElement('span');
       rawSpan.className = 'raw-val';
-      rawSpan.textContent = `Valeur dans le fichier Excel : "${errInfo.rawValue}" (${errInfo.reason})`;
+      rawSpan.textContent = `Valeur dans le fichier CSV : "${errInfo.rawValue}" (${errInfo.reason})`;
       group.appendChild(rawSpan);
 
       if (col === 'Cycle') {
@@ -473,7 +473,7 @@
       } else if (col === 'Niveau') {
         const grid = document.createElement('div');
         grid.className = 'checkbox-grid';
-        const currentSelected = rowObj.data.Niveau.slice(1); // Enlève le 'L'
+        const currentSelected = rowObj.data.Niveau.slice(1);
         VALID_NIVEAUX.forEach(niv => {
           const item = document.createElement('label');
           item.className = 'checkbox-item';
@@ -520,7 +520,6 @@
     return select;
   }
 
-  // Navigation Précédent
   document.getElementById('prevAnomalyBtn').onclick = () => {
     if (currentAnomalyIdx > 0) {
       currentAnomalyIdx--;
@@ -528,14 +527,12 @@
     }
   };
 
-  // Ignorer la ligne
   document.getElementById('ignoreRowBtn').onclick = () => {
     const anomalies = getAnomalyRows();
     anomalies[currentAnomalyIdx].ignored = true;
     updateReviewUI();
   };
 
-  // Validation de la correction en cours
   document.getElementById('nextAnomalyBtn').onclick = () => {
     const anomalies = getAnomalyRows();
     const rowObj = anomalies[currentAnomalyIdx];
@@ -560,7 +557,6 @@
 
     rowObj.resolved = true;
 
-    // Cherche la prochaine anomalie non résolue, sinon avance simplement
     const updatedAnomalies = getAnomalyRows();
     const nextUnresolved = updatedAnomalies.findIndex((r, i) => i > currentAnomalyIdx && !r.resolved);
     if (nextUnresolved !== -1) {
@@ -573,9 +569,6 @@
     updateReviewUI();
   };
 
-  // =========================================================================
-  // 6. ENVOI FINAL DANS GRIST
-  // =========================================================================
   finalImportBtn.onclick = async () => {
     const rowsToImport = parsedRows.filter(r => !r.ignored && r.resolved).map(r => r.data);
     if (rowsToImport.length === 0) return;
@@ -584,7 +577,6 @@
     finalImportBtn.textContent = "Importation en cours...";
 
     try {
-      // Préparation du format colonnaire attendu par BulkAddRecord de Grist
       const colNames = Object.keys(rowsToImport[0]);
       const columnsData = {};
       colNames.forEach(col => {
