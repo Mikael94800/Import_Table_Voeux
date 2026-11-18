@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Import Excel - Table_voeux (Grist)</title>
+  <!-- API Grist -->
+  <script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+  <!-- Bibliothèque SheetJS pour lire les fichiers Excel -->
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+  <style>
+    :root {
+      --primary: #16b378; /* Vert Grist */
+      --primary-hover: #129664;
+      --danger: #e53e3e;
+      --warning: #dd6b20;
+      --bg: #f7fafc;
+      --card: #ffffff;
+      --text: #2d3748;
+      --border: #e2e8f0;
+    }
+
+    * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    body { margin: 0; padding: 20px; background: transparent; color: var(--text); display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+
+    /* Bouton déclencheur principal */
+    .btn {
+      background: var(--primary); color: white; border: none; padding: 12px 20px;
+      border-radius: 6px; font-size: 14px; font-weight: 600; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 8px; transition: background 0.2s;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .btn:hover:not(:disabled) { background: var(--primary-hover); }
+    .btn:disabled { background: #cbd5e0; cursor: not-allowed; box-shadow: none; }
+    .btn-secondary { background: #edf2f7; color: var(--text); }
+    .btn-secondary:hover:not(:disabled) { background: #e2e8f0; }
+    .btn-danger { background: #fed7d7; color: #c53030; }
+    .btn-danger:hover { background: #feb2b2; }
+
+    /* Modale */
+    .modal-overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.5);
+      justify-content: center; align-items: center; z-index: 1000; padding: 16px;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: var(--card); width: 100%; max-width: 650px; border-radius: 10px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.2); overflow: hidden; display: flex; flex-direction: column; max-height: 90vh;
+    }
+    .modal-header {
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center; font-weight: 700; font-size: 16px;
+    }
+    .close-btn { background: none; border: none; font-size: 20px; cursor: pointer; color: #718096; }
+    .modal-body { padding: 20px; overflow-y: auto; }
+    .modal-footer {
+      padding: 14px 20px; border-top: 1px solid var(--border); background: var(--bg);
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+    }
+
+    /* Zone Drag & Drop */
+    .drop-zone {
+      border: 2px dashed #cbd5e0; border-radius: 8px; padding: 40px 20px; text-align: center;
+      cursor: pointer; transition: all 0.2s; background: var(--bg);
+    }
+    .drop-zone:hover, .drop-zone.dragover { border-color: var(--primary); background: #f0fff4; }
+    .drop-zone p { margin: 8px 0 0; color: #718096; font-size: 13px; }
+    .file-badge {
+      margin-top: 15px; padding: 10px; background: #e6fffa; border: 1px solid #81e6d9;
+      border-radius: 6px; color: #234e52; font-weight: 600; display: none;
+    }
+
+    /* Résumé et Anomalies */
+    .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .stat-card { padding: 15px; border-radius: 8px; border: 1px solid var(--border); text-align: center; }
+    .stat-card.valid { background: #f0fff4; border-color: #9ae6b4; color: #22543d; }
+    .stat-card.error { background: #fffaf0; border-color: #fbd38d; color: #744210; }
+    .stat-card.error.zero { background: #f0fff4; border-color: #9ae6b4; color: #22543d; }
+    .stat-num { font-size: 28px; font-weight: 800; display: block; }
+
+    .anomaly-box {
+      border: 1px solid #fbd38d; background: #fffaf0; border-radius: 8px; padding: 16px;
+    }
+    .anomaly-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #feebc8; font-weight: 600;
+    }
+    .field-group { margin-bottom: 14px; background: white; padding: 12px; border-radius: 6px; border: 1px solid var(--border); }
+    .field-group label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 4px; }
+    .raw-val { font-size: 12px; color: var(--danger); margin-bottom: 8px; display: block; }
+    select, input[type="text"], input[type="number"] {
+      width: 100%; padding: 8px 10px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 14px;
+    }
+    .checkbox-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; }
+    .checkbox-item { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+    .nav-controls { display: flex; gap: 8px; margin-top: 15px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+
+  <!-- Bouton visible dans le widget Grist -->
+  <button id="openModalBtn" class="btn">
+    <span>📥</span> Importer des vœux (Excel)
+  </button>
+
+  <!-- Modale principale -->
+  <div id="importModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span id="modalTitle">Importer un fichier Excel dans Table_voeux</span>
+        <button class="close-btn" id="closeModalBtn">&times;</button>
+      </div>
+
+      <!-- ÉTAPE 1 : Sélection du fichier -->
+      <div id="stepUpload" class="modal-body">
+        <div id="dropZone" class="drop-zone">
+          <div style="font-size: 32px;">📄</div>
+          <strong>Glisser le fichier à importer ici</strong>
+          <p>ou cliquez pour parcourir vos fichiers (.xlsx, .xls, .csv)</p>
+          <input type="file" id="fileInput" accept=".xlsx, .xls, .csv" class="hidden">
+        </div>
+        <div id="fileInfo" class="file-badge"></div>
+      </div>
+
+      <!-- ÉTAPE 2 : Analyse et Résolution des anomalies -->
+      <div id="stepReview" class="modal-body hidden">
+        <div class="stats-grid">
+          <div class="stat-card valid">
+            <span class="stat-num" id="validCount">0</span>
+            <span>Lignes prêtes à l'import</span>
+          </div>
+          <div class="stat-card error" id="errorCard">
+            <span class="stat-num" id="errorCount">0</span>
+            <span>Anomalie(s) à résoudre</span>
+          </div>
+        </div>
+
+        <!-- Interface de résolution pas-à-pas -->
+        <div id="anomalyContainer" class="anomaly-box hidden">
+          <div class="anomaly-header">
+            <span id="anomalyProgress">Anomalie 1 sur X (Ligne Excel #Y)</span>
+            <button type="button" id="ignoreRowBtn" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Ignorer cette ligne</button>
+          </div>
+          <div id="anomalyContext" style="font-size: 12px; color: #4a5568; margin-bottom: 12px;"></div>
+          <div id="anomalyFields"></div>
+          <div class="nav-controls">
+            <button type="button" id="prevAnomalyBtn" class="btn btn-secondary">⬅ Précédent</button>
+            <button type="button" id="nextAnomalyBtn" class="btn" style="margin-left: auto;">Valider cette ligne & Suivant ➡</button>
+          </div>
+        </div>
+
+        <div id="allClearMsg" class="hidden" style="text-align: center; padding: 20px; color: #22543d; font-weight: 600;">
+          ✅ Toutes les lignes sont conformes ! Vous pouvez lancer l'importation dans Grist.
+        </div>
+      </div>
+
+      <!-- Pied de modale -->
+      <div class="modal-footer">
+        <button type="button" id="resetBtn" class="btn btn-secondary hidden">Changer de fichier</button>
+        <div style="margin-left: auto; display: flex; gap: 10px;">
+          <button type="button" id="cancelBtn" class="btn btn-secondary">Annuler</button>
+          <button type="button" id="validateFileBtn" class="btn" disabled>Analyser le fichier</button>
+          <button type="button" id="finalImportBtn" class="btn hidden" disabled>Importer dans Grist</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // =========================================================================
+  // 1. CONFIGURATION DE LA TABLE GRIST "Table_voeux"
+  // =========================================================================
+  const TABLE_NAME = "Table_voeux";
+
+  const VALID_CYCLES = ["EE", "EM"];
+  const VALID_ECOLES = [
+    "Joséphine Baker", "Louise Michel", "Saint-Exupéry", "Rosenberg",
+    "Paul Doumer", "Anatole France", "Paul Langevin", "Charlie Chaplin",
+    "Jules Vallès", "Joliot-Curie", "Robespierre", "Angela Davis",
+    "Raymond Poincaré", "Henri Wallon"
+  ];
+  const VALID_NIVEAUX = [
+    "TPS", "PS", "MS", "GS", "CP", "CE1", "CE2", "CM1", "CM2", "UPE2A", "ULIS", "UEEA"
+  ];
+
+  const NUMERIC_COLS = ["EffectifsClasse", "CodeParcours", "RangVoeuAttribue", "CoutParcours"];
+  const TEXT_COLS = [
+    "AnneeScolaire", "Enseignant", "NomParcours", "Partenaire",
+    "RangParcours", "VoeuxExprimes", "Mail", "Telephone"
+  ];
+
+  // Initialisation de l'API Grist avec accès complet au document
+  grist.ready({ requiredAccess: 'full' });
+
+  // =========================================================================
+  // 2. ÉTAT DE L'APPLICATION
+  // =========================================================================
+  let selectedFile = null;
+  let parsedRows = []; // Contient { rowIndex, data, errors, ignored, resolved }
+  let currentAnomalyIdx = 0;
+
+  // Éléments DOM
+  const modal = document.getElementById('importModal');
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const fileInfo = document.getElementById('fileInfo');
+  const validateFileBtn = document.getElementById('validateFileBtn');
+  const finalImportBtn = document.getElementById('finalImportBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  // =========================================================================
+  // 3. GESTION DE LA MODALE ET DU DRAG & DROP
+  // =========================================================================
+  document.getElementById('openModalBtn').onclick = () => {
+    resetState();
+    modal.classList.add('active');
+  };
+  document.getElementById('closeModalBtn').onclick = () => modal.classList.remove('active');
+  document.getElementById('cancelBtn').onclick = () => modal.classList.remove('active');
+  resetBtn.onclick = resetState;
+
+  dropZone.onclick = () => fileInput.click();
+  dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragover'); };
+  dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+  dropZone.ondrop = (e) => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length) handleFileSelection(e.dataTransfer.files[0]);
+  };
+  fileInput.onchange = (e) => {
+    if (e.target.files.length) handleFileSelection(e.target.files[0]);
+  };
+
+  function handleFileSelection(file) {
+    selectedFile = file;
+    fileInfo.textContent = `Fichier sélectionné : ${file.name}`;
+    fileInfo.style.display = 'block';
+    validateFileBtn.disabled = false;
+  }
+
+  function resetState() {
+    selectedFile = null;
+    parsedRows = [];
+    currentAnomalyIdx = 0;
+    fileInput.value = '';
+    fileInfo.style.display = 'none';
+    validateFileBtn.disabled = true;
+    validateFileBtn.classList.remove('hidden');
+    finalImportBtn.classList.add('hidden');
+    resetBtn.classList.add('hidden');
+    document.getElementById('stepUpload').classList.remove('hidden');
+    document.getElementById('stepReview').classList.add('hidden');
+  }
+
+  // =========================================================================
+  // 4. PARSING EXCEL & NORMALISATION DES DONNÉES
+  // =========================================================================
+  validateFileBtn.onclick = () => {
+    if (!selectedFile) return;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rawJson = XLSX.utils.sheet_to_json(firstSheet, { defval: "" });
+
+      if (rawJson.length === 0) {
+        alert("Le fichier Excel semble vide.");
+        return;
+      }
+
+      processExcelData(rawJson);
+    };
+    reader.readAsArrayBuffer(selectedFile);
+  };
+
+  // Fonction utilitaire pour supprimer accents, tirets et espaces superflus
+  function normalizeStr(str) {
+    return String(str || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[-_]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
+  // Recherche tolérante pour l'école
+  function matchEcole(rawVal) {
+    const cleanInput = normalizeStr(rawVal);
+    if (!cleanInput) return null;
+    for (const ecole of VALID_ECOLES) {
+      if (normalizeStr(ecole) === cleanInput) return ecole;
+    }
+    return null;
+  }
+
+  // Recherche tolérante pour le Cycle
+  function matchCycle(rawVal) {
+    const clean = String(rawVal || "").trim().toUpperCase();
+    return VALID_CYCLES.includes(clean) ? clean : null;
+  }
+
+  // Découpage intelligent des niveaux multiples ("CP / CE1", "CP,CE1", "CP + CE1", etc.)
+  function parseNiveaux(rawVal) {
+    const str = String(rawVal || "").trim().toUpperCase();
+    if (!str) return { valid: false, values: [] };
+
+    // Sépare sur espace, virgule, point-virgule, slash, plus, tiret
+    const tokens = str.split(/[\s,;\/+\-]+/).filter(t => t.length > 0);
+    if (tokens.length === 0) return { valid: false, values: [] };
+
+    const matched = [];
+    for (const token of tokens) {
+      if (VALID_NIVEAUX.includes(token)) {
+        if (!matched.includes(token)) matched.push(token);
+      } else {
+        return { valid: false, values: [] }; // Un des niveaux n'est pas reconnu
+      }
+    }
+    return { valid: true, values: matched };
+  }
+
+  function processExcelData(rows) {
+    parsedRows = rows.map((row, index) => {
+      const cleanRecord = {};
+      const errors = {}; // { colName: { rawValue, reason } }
+
+      // 1. Colonnes Texte
+      TEXT_COLS.forEach(col => {
+        cleanRecord[col] = row[col] !== undefined && row[col] !== null ? String(row[col]).trim() : "";
+      });
+
+      // 2. Colonnes Numériques
+      NUMERIC_COLS.forEach(col => {
+        const raw = row[col];
+        if (raw === "" || raw === null || raw === undefined) {
+          cleanRecord[col] = null;
+        } else {
+          // Nettoie espaces et symboles (€)
+          const num = Number(String(raw).replace(/\s/g, '').replace('€', '').replace(',', '.'));
+          if (isNaN(num)) {
+            errors[col] = { rawValue: raw, reason: "Valeur numérique attendue" };
+            cleanRecord[col] = null;
+          } else {
+            cleanRecord[col] = num;
+          }
+        }
+      });
+
+      // 3. Cycle (Choix unique)
+      const matchedCycle = matchCycle(row["Cycle"]);
+      if (matchedCycle) {
+        cleanRecord["Cycle"] = matchedCycle;
+      } else {
+        errors["Cycle"] = { rawValue: row["Cycle"] || "(vide)", reason: "Cycle invalide (EE ou EM attendu)" };
+        cleanRecord["Cycle"] = "";
+      }
+
+      // 4. Ecole (Choix unique tolérant aux accents)
+      const matchedEcole = matchEcole(row["Ecole"]);
+      if (matchedEcole) {
+        cleanRecord["Ecole"] = matchedEcole;
+      } else {
+        errors["Ecole"] = { rawValue: row["Ecole"] || "(vide)", reason: "École non reconnue dans la liste Grist" };
+        cleanRecord["Ecole"] = "";
+      }
+
+      // 5. Niveau (Choix multiple)
+      const parsedNiv = parseNiveaux(row["Niveau"]);
+      if (parsedNiv.valid) {
+        // Format attendu par Grist pour les colonnes ChoiceList : ['L', 'CP', 'CE1']
+        cleanRecord["Niveau"] = ['L', ...parsedNiv.values];
+      } else {
+        errors["Niveau"] = { rawValue: row["Niveau"] || "(vide)", reason: "Un ou plusieurs niveaux non reconnus" };
+        cleanRecord["Niveau"] = ['L'];
+      }
+
+      return {
+        excelLine: index + 2, // +2 car ligne 1 = en-têtes Excel
+        data: cleanRecord,
+        errors: errors,
+        ignored: false,
+        resolved: Object.keys(errors).length === 0
+      };
+    });
+
+    // Basculer vers l'écran d'analyse
+    document.getElementById('stepUpload').classList.add('hidden');
+    document.getElementById('stepReview').classList.remove('hidden');
+    validateFileBtn.classList.add('hidden');
+    finalImportBtn.classList.remove('hidden');
+    resetBtn.classList.remove('hidden');
+
+    currentAnomalyIdx = 0;
+    updateReviewUI();
+  }
+
+  // =========================================================================
+  // 5. INTERFACE DE RÉSOLUTION DES ANOMALIES
+  // =========================================================================
+  function getAnomalyRows() {
+    // Retourne toutes les lignes qui avaient initialement une erreur et qui ne sont pas ignorées
+    return parsedRows.filter(r => Object.keys(r.errors).length > 0 && !r.ignored);
+  }
+
+  function updateReviewUI() {
+    const anomalies = getAnomalyRows();
+    const unresolvedCount = anomalies.filter(r => !r.resolved).length;
+    const validReadyCount = parsedRows.filter(r => !r.ignored && r.resolved).length;
+
+    document.getElementById('validCount').textContent = validReadyCount;
+    document.getElementById('errorCount').textContent = unresolvedCount;
+
+    const errorCard = document.getElementById('errorCard');
+    const anomalyContainer = document.getElementById('anomalyContainer');
+    const allClearMsg = document.getElementById('allClearMsg');
+
+    if (unresolvedCount === 0) {
+      errorCard.classList.add('zero');
+      anomalyContainer.classList.add('hidden');
+      allClearMsg.classList.remove('hidden');
+      finalImportBtn.disabled = validReadyCount === 0;
+      return;
+    }
+
+    errorCard.classList.remove('zero');
+    allClearMsg.classList.add('hidden');
+    anomalyContainer.classList.remove('hidden');
+    finalImportBtn.disabled = true; // Verrouillé tant qu'il reste une anomalie
+
+    // S'assurer que l'index reste dans les bornes
+    if (currentAnomalyIdx >= anomalies.length) currentAnomalyIdx = anomalies.length - 1;
+    if (currentAnomalyIdx < 0) currentAnomalyIdx = 0;
+
+    renderAnomalyEditor(anomalies, currentAnomalyIdx);
+  }
+
+  function renderAnomalyEditor(anomalies, idx) {
+    const rowObj = anomalies[idx];
+    document.getElementById('anomalyProgress').textContent =
+      `Anomalie ${idx + 1} sur ${anomalies.length} (Ligne Excel n°${rowObj.excelLine}) ${rowObj.resolved ? '✅ Corrigée' : '⚠️ À corriger'}`;
+
+    document.getElementById('anomalyContext').innerHTML =
+      `<strong>Contexte :</strong> Enseignant : <em>${rowObj.data.Enseignant || 'Non renseigné'}</em> | Parcours : <em>${rowObj.data.NomParcours || 'Non renseigné'}</em>`;
+
+    const fieldsContainer = document.getElementById('anomalyFields');
+    fieldsContainer.innerHTML = '';
+
+    // Génère uniquement les champs en erreur pour cette ligne
+    for (const [col, errInfo] of Object.entries(rowObj.errors)) {
+      const group = document.createElement('div');
+      group.className = 'field-group';
+
+      const label = document.createElement('label');
+      label.textContent = `Colonne : ${col}`;
+      group.appendChild(label);
+
+      const rawSpan = document.createElement('span');
+      rawSpan.className = 'raw-val';
+      rawSpan.textContent = `Valeur dans le fichier Excel : "${errInfo.rawValue}" (${errInfo.reason})`;
+      group.appendChild(rawSpan);
+
+      if (col === 'Cycle') {
+        const select = createSelect(VALID_CYCLES, rowObj.data.Cycle);
+        select.id = `input_${col}`;
+        group.appendChild(select);
+      } else if (col === 'Ecole') {
+        const select = createSelect(VALID_ECOLES, rowObj.data.Ecole);
+        select.id = `input_${col}`;
+        group.appendChild(select);
+      } else if (col === 'Niveau') {
+        const grid = document.createElement('div');
+        grid.className = 'checkbox-grid';
+        const currentSelected = rowObj.data.Niveau.slice(1); // Enlève le 'L'
+        VALID_NIVEAUX.forEach(niv => {
+          const item = document.createElement('label');
+          item.className = 'checkbox-item';
+          const cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = niv;
+          cb.name = 'input_Niveau';
+          cb.checked = currentSelected.includes(niv);
+          item.appendChild(cb);
+          item.appendChild(document.createTextNode(niv));
+          grid.appendChild(item);
+        });
+        group.appendChild(grid);
+      } else if (NUMERIC_COLS.includes(col)) {
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.step = 'any';
+        input.id = `input_${col}`;
+        input.value = rowObj.data[col] !== null ? rowObj.data[col] : '';
+        input.placeholder = "Saisir un nombre (ou laisser vide)";
+        group.appendChild(input);
+      }
+
+      fieldsContainer.appendChild(group);
+    }
+
+    document.getElementById('prevAnomalyBtn').disabled = (idx === 0);
+  }
+
+  function createSelect(options, selectedVal) {
+    const select = document.createElement('select');
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = "";
+    defaultOpt.textContent = "-- Sélectionner une valeur --";
+    select.appendChild(defaultOpt);
+
+    options.forEach(optVal => {
+      const opt = document.createElement('option');
+      opt.value = optVal;
+      opt.textContent = optVal;
+      if (optVal === selectedVal) opt.selected = true;
+      select.appendChild(opt);
+    });
+    return select;
+  }
+
+  // Navigation Précédent
+  document.getElementById('prevAnomalyBtn').onclick = () => {
+    if (currentAnomalyIdx > 0) {
+      currentAnomalyIdx--;
+      updateReviewUI();
+    }
+  };
+
+  // Ignorer la ligne
+  document.getElementById('ignoreRowBtn').onclick = () => {
+    const anomalies = getAnomalyRows();
+    anomalies[currentAnomalyIdx].ignored = true;
+    updateReviewUI();
+  };
+
+  // Validation de la correction en cours
+  document.getElementById('nextAnomalyBtn').onclick = () => {
+    const anomalies = getAnomalyRows();
+    const rowObj = anomalies[currentAnomalyIdx];
+    let allFieldsValid = true;
+
+    for (const col of Object.keys(rowObj.errors)) {
+      if (col === 'Cycle' || col === 'Ecole') {
+        const val = document.getElementById(`input_${col}`).value;
+        if (!val) { alert(`Veuillez sélectionner une valeur pour ${col}.`); allFieldsValid = false; break; }
+        rowObj.data[col] = val;
+      } else if (col === 'Niveau') {
+        const checked = Array.from(document.querySelectorAll('input[name="input_Niveau"]:checked')).map(cb => cb.value);
+        if (checked.length === 0) { alert("Veuillez cocher au moins un niveau."); allFieldsValid = false; break; }
+        rowObj.data.Niveau = ['L', ...checked];
+      } else if (NUMERIC_COLS.includes(col)) {
+        const raw = document.getElementById(`input_${col}`).value;
+        rowObj.data[col] = raw === "" ? null : Number(raw);
+      }
+    }
+
+    if (!allFieldsValid) return;
+
+    rowObj.resolved = true;
+
+    // Cherche la prochaine anomalie non résolue, sinon avance simplement
+    const updatedAnomalies = getAnomalyRows();
+    const nextUnresolved = updatedAnomalies.findIndex((r, i) => i > currentAnomalyIdx && !r.resolved);
+    if (nextUnresolved !== -1) {
+      currentAnomalyIdx = nextUnresolved;
+    } else {
+      const firstUnresolved = updatedAnomalies.findIndex(r => !r.resolved);
+      if (firstUnresolved !== -1) currentAnomalyIdx = firstUnresolved;
+    }
+
+    updateReviewUI();
+  };
+
+  // =========================================================================
+  // 6. ENVOI FINAL DANS GRIST
+  // =========================================================================
+  finalImportBtn.onclick = async () => {
+    const rowsToImport = parsedRows.filter(r => !r.ignored && r.resolved).map(r => r.data);
+    if (rowsToImport.length === 0) return;
+
+    finalImportBtn.disabled = true;
+    finalImportBtn.textContent = "Importation en cours...";
+
+    try {
+      // Préparation du format colonnaire attendu par BulkAddRecord de Grist
+      const colNames = Object.keys(rowsToImport[0]);
+      const columnsData = {};
+      colNames.forEach(col => {
+        columnsData[col] = rowsToImport.map(r => r[col]);
+      });
+
+      const rowIds = new Array(rowsToImport.length).fill(null);
+
+      await grist.docApi.applyUserActions([
+        ['BulkAddRecord', TABLE_NAME, rowIds, columnsData]
+      ]);
+
+      alert(`✅ Succès ! ${rowsToImport.length} ligne(s) ajoutée(s) dans "${TABLE_NAME}".`);
+      modal.classList.remove('active');
+    } catch (err) {
+      console.error("Erreur Grist :", err);
+      alert("❌ Erreur lors de l'importation dans Grist : " + err.message);
+      finalImportBtn.disabled = false;
+      finalImportBtn.textContent = "Importer dans Grist";
+    }
+  };
+</script>
+</body>
+</html>
