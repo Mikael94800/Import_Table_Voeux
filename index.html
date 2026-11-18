@@ -71,6 +71,7 @@
     .stat-card.error { background: #fffaf0; border-color: #fbd38d; color: #744210; }
     .stat-card.error.zero { background: #f0fff4; border-color: #9ae6b4; color: #22543d; }
     .stat-num { font-size: 28px; font-weight: 800; display: block; }
+    .stat-label { font-size: 13px; line-height: 1.4; display: block; margin-top: 4px; }
 
     .anomaly-box {
       border: 1px solid #fbd38d; background: #fffaf0; border-radius: 8px; padding: 16px;
@@ -120,11 +121,11 @@
         <div class="stats-grid">
           <div class="stat-card valid">
             <span class="stat-num" id="validCount">0</span>
-            <span>Lignes prêtes à l'import</span>
+            <span class="stat-label" id="validLabel">Lignes prêtes à l'import sur 0</span>
           </div>
           <div class="stat-card error" id="errorCard">
             <span class="stat-num" id="errorCount">0</span>
-            <span>Anomalie(s) à résoudre</span>
+            <span class="stat-label">Anomalie(s) à résoudre</span>
           </div>
         </div>
 
@@ -293,6 +294,7 @@
     reader.readAsText(selectedFile, 'UTF-8');
   };
 
+  // Fonction utilitaire de nettoyage (supprime accents, espaces multiples, met en minuscule)
   function normalizeStr(str) {
     return String(str || "")
       .normalize("NFD")
@@ -303,7 +305,7 @@
       .toLowerCase();
   }
 
-  // Reconnaissance automatique du cycle uniquement
+  // Reconnaissance automatique et tolérante du CYCLE ("EE" ou "EM", insensible à la casse et aux espaces)
   function matchCycle(rawVal) {
     const clean = String(rawVal || "").trim().toUpperCase();
     if (VALID_CYCLES.includes(clean)) return clean;
@@ -312,12 +314,27 @@
     return null;
   }
 
-  // Vérification exacte / tolérante pour l'école (doit correspondre à la liste, sinon erreur)
-  function matchEcoleExact(rawVal) {
-    const val = String(rawVal || "").trim();
-    // Recherche correspondance exacte sensible ou insensible à la casse
-    const found = VALID_ECOLES.find(e => e.toLowerCase() === val.toLowerCase());
-    return found || null;
+  // Reconnaissance automatique et intelligente de l'ECOLE (gère accents ex: "Angéla Davis" -> "Angela Davis", ou nom partiel "Davis")
+  function matchEcole(rawVal) {
+    const cleanInput = normalizeStr(rawVal);
+    if (!cleanInput) return null;
+
+    // 1. Recherche par correspondance exacte normalisée (sans accents ni casse)
+    for (const ecole of VALID_ECOLES) {
+      if (normalizeStr(ecole) === cleanInput) {
+        return ecole;
+      }
+    }
+
+    // 2. Recherche par inclusion / correspondance partielle (ex: "Davis" ou "Angela" match "Angela Davis")
+    for (const ecole of VALID_ECOLES) {
+      const cleanRef = normalizeStr(ecole);
+      if (cleanRef.includes(cleanInput) || cleanInput.includes(cleanRef)) {
+        return ecole;
+      }
+    }
+
+    return null;
   }
 
   // Analyse des niveaux multiples
@@ -369,7 +386,7 @@
         }
       });
 
-      // 1. CYCLE : Reconnaissance automatique
+      // 1. CYCLE : Reconnaissance automatique et tolérante
       const rawCycle = getVal("Cycle");
       const matchedCycle = matchCycle(rawCycle);
       if (matchedCycle) {
@@ -379,9 +396,9 @@
         cleanRecord["Cycle"] = "";
       }
 
-      // 2. ECOLE : Validation stricte (remonte en anomalie si non conforme/inconnue)
+      // 2. ECOLE : Reconnaissance automatique et intelligente (accents, casse, noms partiels)
       const rawEcole = getVal("Ecole");
-      const matchedEcole = matchEcoleExact(rawEcole);
+      const matchedEcole = matchEcole(rawEcole);
       if (matchedEcole) {
         cleanRecord["Ecole"] = matchedEcole;
       } else {
@@ -389,7 +406,7 @@
         cleanRecord["Ecole"] = "";
       }
 
-      // 3. NIVEAU : Validation des choix multiples (remonte en anomalie si format invalide)
+      // 3. NIVEAU : Validation des choix multiples
       const rawNiveau = getVal("Niveau");
       const parsedNiv = parseNiveaux(rawNiveau);
       if (parsedNiv.valid) {
@@ -426,8 +443,10 @@
     const anomalies = getAnomalyRows();
     const unresolvedCount = anomalies.filter(r => !r.resolved).length;
     const validReadyCount = parsedRows.filter(r => !r.ignored && r.resolved).length;
+    const totalRowsCount = parsedRows.length;
 
     document.getElementById('validCount').textContent = validReadyCount;
+    document.getElementById('validLabel').textContent = `Lignes prêtes à l'import sur ${totalRowsCount}`;
     document.getElementById('errorCount').textContent = unresolvedCount;
 
     const errorCard = document.getElementById('errorCard');
@@ -563,7 +582,7 @@
         if (checked.length === 0) { alert("Veuillez cocher au moins un niveau."); allFieldsValid = false; break; }
         rowObj.data.Niveau = ['L', ...checked];
       } else if (NUMERIC_COLS.includes(col)) {
-        const raw = document.getElementById(`input_${col}`).value;
+        const raw = document.getElementById(`input_' + col`).value;
         rowObj.data[col] = raw === "" ? null : Number(raw);
       }
     }
